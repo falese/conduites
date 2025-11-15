@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conduites-bff
+  labels:
+    app: conduites-bff
+    version: v1
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: conduites-bff
+  template:
+    metadata:
+      labels:
+        app: conduites-bff
+        version: v1
+      annotations:
+        # Istio sidecar injection
+        sidecar.istio.io/inject: "true"
+    spec:
+      containers:
+      - name: bff
+        image: conduites-bff:latest
+        ports:
+        - containerPort: 4000
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "4000"
+        - name: ASSETS_MODE
+          value: "production"
+        - name: ASSETS_CDN_URL
+          value: "https://cdn.example.com"
+        - name: USER_SERVICE_URL
+          value: "http://user-service:8080"
+        - name: PRODUCT_SERVICE_URL
+          value: "http://product-service:8080"
+        - name: NOTIFICATION_SERVICE_URL
+          value: "http://notification-service:8080"
+        - name: SERVICE_NAME
+          value: "conduites-bff"
+        - name: SERVICE_VERSION
+          value: "1.0.0"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 4000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 4000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1001
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: conduites-bff
+  labels:
+    app: conduites-bff
+spec:
+  ports:
+  - port: 80
+    targetPort: 4000
+    protocol: TCP
+    name: http
+  selector:
+    app: conduites-bff
+  type: ClusterIP
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: conduites-bff
+spec:
+  http:
+  - match:
+    - uri:
+        prefix: /graphql
+    - uri:
+        prefix: /api
+    - uri:
+        prefix: /assets
+    route:
+    - destination:
+        host: conduites-bff
+        port:
+          number: 80
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: conduites-bff
+spec:
+  host: conduites-bff
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 100
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 2
+    loadBalancer:
+      simple: LEAST_CONN

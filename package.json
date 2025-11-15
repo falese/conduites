@@ -1,0 +1,43 @@
+{
+  "name": "graph-conduit-accounts",
+  "version": "1.0.0",
+  "description": "Node.js 20 LTS TypeScript project with GraphQL",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage"
+  },
+  "keywords": [
+    "nodejs",
+    "typescript",
+    "graphql",
+    "express",
+    "graphql-yoga",
+    "es-modules"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "graphql": "^16.8.1",
+    "graphql-yoga": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^1.0.4"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
