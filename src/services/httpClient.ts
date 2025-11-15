@@ -32,7 +32,9 @@ export class HttpClient {
     data?: any,
     headers?: Record<string, string>
   ): Promise<ServiceResponse<T>> {
-    const url = `${this.baseUrl}${path}`;
+    // Ensure path starts with / for proper URL construction
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    const url = `${this.baseUrl}${normalizedPath}`;
     const requestHeaders = { ...this.defaultHeaders, ...headers };
 
     try {

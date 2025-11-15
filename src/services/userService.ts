@@ -1,7 +1,7 @@
 import { HttpClient } from './httpClient.js';
 import { appConfig } from '../config/index.js';
 
-interface User {
+export interface User {
   id: string;
   email: string;
   name: string;
@@ -10,7 +10,7 @@ interface User {
   updatedAt: string;
 }
 
-interface UserInput {
+export interface UserInput {
   email: string;
   name: string;
   avatar?: string;

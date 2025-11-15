@@ -1,4 +1,4 @@
-interface AssetConfig {
+export interface AssetConfig {
   cdnEnabled: boolean;    // Whether to use CDN for static assets
   baseUrl: string;        // Base URL for CDN or local assets
   version: string;        // Build version for cache busting

@@ -3,7 +3,7 @@ import { appConfig } from '../config/index.js';
 
 type NotificationType = 'INFO' | 'WARNING' | 'SUCCESS' | 'ERROR';
 
-interface Notification {
+export interface Notification {
   id: string;
   userId: string;
   type: NotificationType;
@@ -13,7 +13,7 @@ interface Notification {
   createdAt: string;
 }
 
-interface NotificationInput {
+export interface NotificationInput {
   userId: string;
   type: NotificationType;
   title: string;

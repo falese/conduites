@@ -1,7 +1,7 @@
 import { HttpClient } from './httpClient.js';
 import { appConfig } from '../config/index.js';
 
-interface Product {
+export interface Product {
   id: string;
   name: string;
   description?: string;
@@ -12,7 +12,7 @@ interface Product {
   createdAt: string;
 }
 
-interface ProductInput {
+export interface ProductInput {
   name: string;
   description?: string;
   price: number;

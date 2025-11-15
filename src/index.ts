@@ -1,130 +1,186 @@
 import express from 'express';
 import { createYoga } from 'graphql-yoga';
+import cluster from 'cluster';
+import { cpus } from 'os';
+import { randomUUID } from 'crypto';
+import { config } from './config/environment.js';
 import { schema } from './schema/index.js';
-import { appConfig } from './config/index.js';
-import { requestLogger } from './middleware/requestLogger.js';
-import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
-import { corsHandler, securityHeaders, serviceMeshHeaders } from './middleware/security.js';
-import { healthCheck, readinessCheck } from './middleware/health.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { assetMiddleware } from './middleware/assetMiddleware.js';
+import type { AssetConfig } from './config/environment.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+/**
+ * Generate HTML document with proper asset loading based on configuration
+ * @param assetConfig - Asset configuration for CDN vs local assets
+ * @returns Complete HTML document as string
+ */
+function generateIndexHtml(assetConfig: AssetConfig): string {
+  const cssUrl = assetConfig.cdnEnabled 
+    ? `${assetConfig.baseUrl}/${assetConfig.version}/mfe-accounts.css`
+    : '/assets/mfe-accounts.css';
+    
+  const jsUrl = assetConfig.cdnEnabled 
+    ? `${assetConfig.baseUrl}/${assetConfig.version}/mfe-accounts.js`
+    : '/assets/mfe-accounts.js';
 
-// Create Express app
-const app = express();
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graph Conduit Accounts</title>
+    <link rel="stylesheet" href="${cssUrl}">
+    <script>
+        window.ASSET_CONFIG = ${JSON.stringify(assetConfig)};
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+    <script src="${jsUrl}"></script>
+</body>
+</html>`;
+}
 
-// Trust proxy headers (for service mesh/load balancer)
-app.set('trust proxy', true);
+/**
+ * Health check endpoints for Kubernetes liveness/readiness probes
+ */
+function setupHealthChecks(app: express.Application) {
+  const healthResponse = {
+    status: 'healthy',
+    timestamp: () => new Date().toISOString(),
+    environment: config.environment,
+    version: config.assets.version,
+  };
 
-// Apply global middleware
-app.use(corsHandler);
-app.use(securityHeaders);
-app.use(serviceMeshHeaders);
-app.use(requestLogger);
-app.use(express.json());
-
-// Health check endpoints (before other routes)
-app.get(appConfig.healthCheck.healthPath, healthCheck);
-app.get(appConfig.healthCheck.readinessPath, readinessCheck);
-
-// Static asset serving logic
-if (appConfig.assets.mode === 'development') {
-  // Development mode: serve static files locally
-  console.log('Development mode: serving static assets from', appConfig.assets.localPath);
-  app.use('/assets', express.static(path.resolve(appConfig.assets.localPath)));
-  
-  // Serve MFE assets endpoint
-  app.get('/api/assets-config', (req, res) => {
-    res.json({
-      mode: 'development',
-      baseUrl: `http://${appConfig.server.host}:${appConfig.server.port}/assets`,
-      cdnUrl: null,
-    });
+  // Standard health check endpoint
+  app.get('/health', (req, res) => {
+    res.json({ ...healthResponse, timestamp: healthResponse.timestamp() });
   });
-} else {
-  // Production mode: return CDN URLs
-  console.log('Production mode: using CDN assets from', appConfig.assets.cdnUrl);
-  
-  app.get('/api/assets-config', (req, res) => {
-    res.json({
-      mode: 'production',
-      baseUrl: appConfig.assets.cdnUrl,
-      cdnUrl: appConfig.assets.cdnUrl,
-    });
+
+  // Spring Boot Actuator style health endpoint
+  app.get('/actuator/health', (req, res) => {
+    res.json({ ...healthResponse, timestamp: healthResponse.timestamp() });
   });
 }
 
-// Create GraphQL Yoga instance
-const yoga = createYoga({
-  schema,
-  graphqlEndpoint: appConfig.graphql.endpoint,
-  graphiql: appConfig.graphql.playground && appConfig.server.nodeEnv === 'development',
-  cors: false, // Already handled by our CORS middleware
-  maskedErrors: appConfig.server.nodeEnv === 'production',
-  logging: {
-    debug: console.debug,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-  },
-});
-
-// Apply GraphQL middleware
-app.use(appConfig.graphql.endpoint, yoga);
-
-// API route for basic info
-app.get('/api/info', (req, res) => {
-  res.json({
-    service: appConfig.serviceMesh.serviceName,
-    version: appConfig.serviceMesh.serviceVersion,
-    environment: appConfig.server.nodeEnv,
-    graphql: {
-      endpoint: appConfig.graphql.endpoint,
-      playground: appConfig.graphql.playground && appConfig.server.nodeEnv === 'development',
-    },
-    assets: {
-      mode: appConfig.assets.mode,
-      ...(appConfig.assets.mode === 'production' ? { cdnUrl: appConfig.assets.cdnUrl } : {}),
-    },
+/**
+ * Create and configure the GraphQL Yoga instance
+ */
+function createGraphQLServer() {
+  return createYoga({
+    schema,
+    graphqlEndpoint: '/graphql',
+    
+    // Environment-based logging configuration
+    logging: config.isDevelopment,
+    
+    // Disable landing page (this is a thin BFF, not a public GraphQL API)
+    landingPage: false,
+    
+    // Enable GraphiQL only in development
+    graphiql: config.isDevelopment,
   });
-});
+}
 
-// 404 handler for unmatched routes
-app.use(notFoundHandler);
+/**
+ * Setup SPA fallback - serve index.html or generate HTML based on CDN mode
+ */
+function setupSpaFallback(app: express.Application) {
+  app.get('*', (req, res) => {
+    // Skip API routes and assets
+    if (req.path.startsWith('/graphql') || 
+        req.path.startsWith('/health') || 
+        req.path.startsWith('/actuator') ||
+        req.path.startsWith('/assets')) {
+      return res.status(404).json({ error: 'Not Found' });
+    }
 
-// Global error handler (must be last)
-app.use(errorHandler);
+    // Generate HTML with proper asset configuration
+    const html = generateIndexHtml(config.assets);
+    res.send(html);
+  });
+}
 
-// Start server
-const startServer = async () => {
+/**
+ * Start the Express server with GraphQL Yoga
+ * This is a thin BFF - only orchestrates I/O, no business logic
+ */
+async function startServer(): Promise<void> {
   try {
-    app.listen(appConfig.server.port, appConfig.server.host, () => {
-      console.log(`🚀 Server ready at http://${appConfig.server.host}:${appConfig.server.port}`);
-      console.log(`📊 GraphQL endpoint: http://${appConfig.server.host}:${appConfig.server.port}${appConfig.graphql.endpoint}`);
+    const app = express();
+
+    // Trust proxy headers for service mesh/load balancer
+    app.set('trust proxy', true);
+
+    // Basic middleware
+    app.use(express.json());
+
+    // Health check endpoints (must be first for K8s probes)
+    setupHealthChecks(app);
+
+    // Asset serving middleware
+    app.use(assetMiddleware);
+
+    // GraphQL endpoint
+    const yoga = createGraphQLServer();
+    app.use('/graphql', yoga);
+
+    // SPA fallback for micro-frontend routing
+    setupSpaFallback(app);
+
+    // Start server
+    const server = app.listen(config.port, () => {
+      const workerId = cluster.worker?.id || 'master';
+      console.log(`🚀 Worker ${workerId}: Server ready at http://localhost:${config.port}`);
+      console.log(`📊 GraphQL endpoint: http://localhost:${config.port}/graphql`);
       
-      if (appConfig.graphql.playground && appConfig.server.nodeEnv === 'development') {
-        console.log(`🎮 GraphQL Playground: http://${appConfig.server.host}:${appConfig.server.port}${appConfig.graphql.endpoint}`);
+      if (config.isDevelopment) {
+        console.log(`🎮 GraphiQL: http://localhost:${config.port}/graphql`);
       }
       
-      console.log(`💓 Health check: http://${appConfig.server.host}:${appConfig.server.port}${appConfig.healthCheck.healthPath}`);
-      console.log(`✅ Readiness check: http://${appConfig.server.host}:${appConfig.server.port}${appConfig.healthCheck.readinessPath}`);
+      console.log(`💓 Health checks: /health, /actuator/health`);
+      console.log(`🏗️  Environment: ${config.environment}`);
+      console.log(`📦 CDN enabled: ${config.assets.cdnEnabled}`);
     });
+
+    // Graceful shutdown
+    const shutdown = () => {
+      console.log(`⏹️  Worker ${cluster.worker?.id || 'master'}: Shutting down gracefully...`);
+      server.close(() => {
+        console.log(`✅ Worker ${cluster.worker?.id || 'master'}: Server closed`);
+        process.exit(0);
+      });
+    };
+
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('❌ Failed to start server:', error);
     process.exit(1);
   }
-};
+}
 
-// Graceful shutdown
-const gracefulShutdown = () => {
-  console.log('Received shutdown signal, shutting down gracefully...');
-  process.exit(0);
-};
+/**
+ * Production clustering - fork workers for each CPU core
+ * Development runs single process for easier debugging
+ */
+if (config.isProduction && cluster.isPrimary) {
+  const numCPUs = cpus().length;
+  
+  console.log(`🏭 Master process ${process.pid} starting ${numCPUs} workers`);
+  
+  // Fork workers
+  for (let i = 0; i < numCPUs; i++) {
+    cluster.fork();
+  }
 
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown);
+  // Handle worker death
+  cluster.on('exit', (worker, code, signal) => {
+    console.log(`⚰️  Worker ${worker.process.pid} died (${signal || code}). Restarting...`);
+    cluster.fork();
+  });
 
-// Start the server
-startServer();
+} else {
+  // Development: single process, Production: worker process
+  startServer();
+}

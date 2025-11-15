@@ -1,0 +1,22 @@
+# GraphQL Schema for Graph Conduit Accounts BFF
+# This is a THIN BFF - types map 1:1 to downstream service responses
+
+type Query {
+  account(id: ID!): Account
+  customer(id: ID!): Customer
+}
+
+type Account {
+  id: ID!
+  accountNumber: String!
+  balance: Float!
+  customerId: String!
+  customer: Customer!
+}
+
+type Customer {
+  id: ID!
+  name: String!
+  email: String!
+  accounts: [Account!]!
+}
